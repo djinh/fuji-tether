@@ -1,0 +1,17 @@
+[Unit]
+Description=Fuji Remote camera web app
+After=network.target
+
+[Service]
+User=@USER@
+Group=@USER@
+# USB access to the camera comes from plugdev (see the libgphoto2 udev rules)
+SupplementaryGroups=plugdev
+WorkingDirectory=@APPDIR@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@APPDIR@/.venv/bin/python server.py --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

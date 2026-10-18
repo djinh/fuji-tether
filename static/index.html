@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fuji Remote</title>
+<style>
+  :root {
+    --bg: #111214; --panel: #1b1c1f; --line: #2c2e33; --text: #e8e8ea;
+    --muted: #8d9098; --accent: #e8b04b; --danger: #e5534b; --ok: #4fb477;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-size: 15px; }
+  header {
+    display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0;
+    background: var(--bg); z-index: 5;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  #conn { margin-left: auto; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  #conn::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+  #conn.on::before { background: var(--ok); }
+  main { display: grid; gap: 16px; padding: 16px; max-width: 1280px; margin: 0 auto; }
+  @media (min-width: 900px) { main { grid-template-columns: minmax(0, 1fr) 340px; } #gallery-wrap { grid-column: 1 / -1; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+
+  #lv { position: relative; aspect-ratio: 4 / 3; background: #000; border-radius: 6px; overflow: hidden; }
+  #lv img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  #lv .placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 16px; }
+  #exif {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 8px 12px;
+    background: linear-gradient(transparent, rgba(0,0,0,.75)); font-variant-numeric: tabular-nums;
+    display: flex; gap: 16px; font-size: 14px; flex-wrap: wrap;
+  }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  button {
+    font: inherit; color: var(--text); background: #2a2c31; border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 14px; cursor: pointer;
+  }
+  button:hover { background: #33363c; }
+  button:disabled { opacity: .5; cursor: default; }
+  #shutter {
+    width: 64px; height: 64px; border-radius: 50%; padding: 0; background: var(--text);
+    border: 4px solid var(--panel); outline: 2px solid var(--text); margin-left: auto;
+  }
+  #shutter:hover { background: #fff; }
+  #shutter.busy { background: var(--danger); outline-color: var(--danger); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  #bulb { display: none; align-items: center; gap: 6px; color: var(--muted); }
+  #bulb.show { display: flex; }
+  input[type=number] { width: 80px; }
+  input, select {
+    font: inherit; color: var(--text); background: #111214; border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 8px; width: 100%;
+  }
+  #msg { min-height: 20px; margin-top: 10px; font-size: 14px; color: var(--muted); }
+  #msg.err { color: var(--danger); }
+
+  #settings { display: grid; gap: 10px; }
+  #settings label { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+  #settings .ro { color: var(--text); padding: 7px 0; }
+
+  #gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+  #gallery figure { margin: 0; cursor: pointer; position: relative; }
+  #gallery img { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: 6px; background: #000; display: block; }
+  #gallery figcaption { font-size: 12px; color: var(--muted); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { position: absolute; top: 6px; left: 6px; background: rgba(0,0,0,.7); font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+  .empty { color: var(--muted); font-size: 14px; }
+
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 12px; max-width: min(96vw, 1400px); }
+  dialog::backdrop { background: rgba(0,0,0,.8); }
+  dialog img { max-width: 100%; max-height: 78vh; display: block; margin: 0 auto; }
+  dialog .row { justify-content: flex-end; }
+  dialog a { color: var(--accent); }
+  .danger { color: var(--danger); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fuji Remote</h1>
+  <span id="model"></span>
+  <span id="conn">connecting…</span>
+</header>
+<main>
+  <section>
+    <div id="lv">
+      <div class="placeholder" id="lv-ph">Live view is off</div>
+      <img id="lv-img" alt="" hidden>
+      <div id="exif"></div>
+    </div>
+    <div class="row">
+      <button id="lv-toggle">Start live view</button>
+      <div id="bulb">Bulb <input id="bulb-s" type="number" min="0.1" step="0.1" value="1"> s</div>
+      <button id="shutter" title="Take picture" aria-label="Take picture"></button>
+    </div>
+    <div id="msg"></div>
+  </section>
+  <section>
+    <h2>Settings</h2>
+    <div id="settings"><span class="empty">Waiting for camera…</span></div>
+  </section>
+  <section id="gallery-wrap">
+    <h2>Captures on this computer</h2>
+    <div id="gallery"></div>
+  </section>
+</main>
+<dialog id="viewer">
+  <img id="viewer-img" alt="">
+  <div class="row">
+    <span id="viewer-name" style="margin-right:auto"></span>
+    <a id="viewer-dl" href="#">Download</a>
+    <button id="viewer-del" class="danger">Delete</button>
+    <button onclick="viewer.close()">Close</button>
+  </div>
+</dialog>
+<script>
+const $ = (id) => document.getElementById(id);
+let state = { busy: false, editing: false, settings: [] };
+
+function say(text, isErr = false) {
+  $("msg").textContent = text;
+  $("msg").className = isErr ? "err" : "";
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: opts.body ? { "Content-Type": "application/json" } : {},
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+// --- status & settings ----------------------------------------------------
+async function refresh() {
+  if (state.busy || state.editing) return;
+  try {
+    const s = await api("/api/status");
+    $("conn").textContent = s.connected ? "connected" : "no camera";
+    $("conn").classList.toggle("on", s.connected);
+    if (!s.connected) { say(s.error, true); return; }
+    $("model").textContent = `${s.model} · fw ${s.firmware}`;
+    $("bulb").classList.toggle("show", s.bulb);
+    renderSettings(s.settings);
+  } catch (e) {
+    $("conn").textContent = "server offline";
+    $("conn").classList.remove("on");
+  }
+}
+
+function renderSettings(settings) {
+  state.settings = settings;
+  const box = $("settings");
+  box.replaceChildren();
+  for (const s of settings) {
+    const label = document.createElement("label");
+    label.append(s.label);
+    if (!s.writable || s.options.length < 2) {
+      const span = document.createElement("span");
+      span.className = "ro";
+      span.textContent = s.display;
+      label.append(span);
+    } else {
+      const sel = document.createElement("select");
+      for (const o of s.options) sel.add(new Option(o.display, JSON.stringify(o.value), false, o.value === s.value));
+      sel.onfocus = () => (state.editing = true);
+      sel.onblur = () => (state.editing = false);
+      sel.onchange = () => setSetting(s, JSON.parse(sel.value), sel);
+      label.append(sel);
+    }
+    box.append(label);
+  }
+  const get = (n) => settings.find((s) => s.name === n)?.display ?? "";
+  $("exif").innerHTML = "";
+  for (const n of ["shutter", "aperture", "iso", "exposure_comp", "film_sim"]) {
+    const v = get(n);
+    if (v) $("exif").append(Object.assign(document.createElement("span"), { textContent: n === "iso" ? `ISO ${v}` : v }));
+  }
+}
+
+async function setSetting(s, value, sel) {
+  sel.disabled = true;
+  try {
+    const r = await api(`/api/settings/${s.name}`, { method: "POST", body: JSON.stringify({ value }) });
+    say(`${s.label} set`);
+    state.editing = false;
+    renderSettings(r.settings);
+    refresh();
+  } catch (e) {
+    say(e.message, true);
+    state.editing = false;
+    refresh();
+  }
+}
+
+// --- capture --------------------------------------------------------------
+$("shutter").onclick = async () => {
+  if (state.busy) return;
+  const bulb = $("bulb").classList.contains("show");
+  const body = bulb ? { bulb_seconds: parseFloat($("bulb-s").value) } : {};
+  state.busy = true;
+  $("shutter").classList.add("busy");
+  say(bulb ? `Exposing for ${body.bulb_seconds} s…` : "Capturing…");
+  try {
+    const r = await api("/api/capture", { method: "POST", body: JSON.stringify(body) });
+    say(`Saved ${r.photos.map((p) => p.name).join(", ")}`);
+    loadGallery();
+  } catch (e) {
+    say(e.message, true);
+  } finally {
+    state.busy = false;
+    $("shutter").classList.remove("busy");
+  }
+};
+
+// --- live view ------------------------------------------------------------
+let lvOn = false;
+$("lv-toggle").onclick = () => setLiveView(!lvOn);
+function setLiveView(on) {
+  lvOn = on;
+  const img = $("lv-img");
+  if (on) {
+    img.src = "/api/liveview.mjpg?t=" + Date.now();
+    img.hidden = false;
+    $("lv-ph").hidden = true;
+  } else {
+    img.removeAttribute("src"); // closes the stream; server stops live view after a few s
+    img.hidden = true;
+    $("lv-ph").hidden = false;
+  }
+  $("lv-toggle").textContent = on ? "Stop live view" : "Start live view";
+}
+$("lv-img").onerror = () => {
+  if (lvOn) { say("Live view interrupted, retrying…", true); setTimeout(() => lvOn && setLiveView(true), 2000); }
+};
+document.addEventListener("visibilitychange", () => { if (document.hidden && lvOn) setLiveView(false); });
+
+// --- gallery --------------------------------------------------------------
+const fmtSize = (b) => (b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.round(b / 1e3) + " kB");
+async function loadGallery() {
+  const { photos } = await api("/api/photos");
+  const g = $("gallery");
+  g.replaceChildren();
+  if (!photos.length) { g.innerHTML = '<span class="empty">No captures yet.</span>'; return; }
+  for (const p of photos) {
+    const fig = document.createElement("figure");
+    const img = Object.assign(document.createElement("img"), { src: `/thumbs/${encodeURIComponent(p.name)}`, loading: "lazy", alt: p.name });
+    const cap = Object.assign(document.createElement("figcaption"), { textContent: `${p.name} · ${fmtSize(p.size)}` });
+    fig.append(img, cap);
+    if (p.raw) fig.append(Object.assign(document.createElement("span"), { className: "badge", textContent: "RAW" }));
+    fig.onclick = () => openViewer(p);
+    g.append(fig);
+  }
+}
+
+const viewer = $("viewer");
+function openViewer(p) {
+  const n = encodeURIComponent(p.name);
+  $("viewer-img").src = `/preview/${n}`;
+  $("viewer-name").textContent = `${p.name} · ${fmtSize(p.size)}`;
+  $("viewer-dl").href = `/photos/${n}`;
+  $("viewer-del").onclick = async () => {
+    if (!confirm(`Delete ${p.name} from this computer?`)) return;
+    await api(`/api/photos/${n}`, { method: "DELETE" });
+    viewer.close();
+    loadGallery();
+  };
+  viewer.showModal();
+}
+
+refresh();
+loadGallery();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
