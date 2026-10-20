@@ -39,6 +39,7 @@ CC_BulbOpen = 0x0500
 CC_BulbClose = 0x000C
 
 SHUTTER_BULB = 0xFFFFFFFF
+RC_DeviceBusy = 0x2019
 
 U16, I16, U32, I32, STR = 4, 3, 6, 5, 0xFFFF
 
@@ -97,6 +98,19 @@ class CameraError(Exception):
     pass
 
 
+def busy_retry(fn, timeout=5.0):
+    """Call fn, retrying while the camera answers DeviceBusy (it does so
+    briefly after a shot or after closing live view)."""
+    deadline = time.time() + timeout
+    while True:
+        try:
+            return fn()
+        except PTPError as e:
+            if e.code != RC_DeviceBusy or time.time() > deadline:
+                raise
+            time.sleep(0.2)
+
+
 def release_from_gvfs():
     """The desktop's gvfs gphoto2 monitor auto-mounts the camera and holds
     the USB interface. Unmount it so we can claim the device."""
@@ -149,6 +163,10 @@ class FujiCamera:
                             except usb.core.USBError:
                                 pass
                     time.sleep(1.5)
+                except PTPError as e:  # e.g. busy right after power-on
+                    last = e
+                    self._drop()
+                    time.sleep(1.5)
                 except RuntimeError as e:  # not plugged in
                     raise CameraError(str(e))
             raise CameraError(f"could not connect to camera: {last}")
@@ -161,7 +179,7 @@ class FujiCamera:
         # A previous run may have left live view open, which blocks the
         # priority change
         self._try(OP_TerminateOpenCapture, (0,))
-        self.ptp.set_prop(DPC_Priority, U16, 2)
+        busy_retry(lambda: self.ptp.set_prop(DPC_Priority, U16, 2))
 
     def _drop(self):
         if self.ptp:
@@ -187,7 +205,8 @@ class FujiCamera:
 
     def _call(self, fn):
         """Run fn with a connected camera. USB failures drop the connection
-        so the next call reconnects (with a port reset if needed)."""
+        so the next call reconnects (with a port reset if needed); camera
+        refusals become CameraError so callers only handle one type."""
         with self.lock:
             self.connect()
             try:
@@ -195,6 +214,8 @@ class FujiCamera:
             except usb.core.USBError as e:
                 self._drop()
                 raise CameraError(f"USB error: {e}") from e
+            except PTPError as e:
+                raise CameraError(f"camera error: {e}") from e
 
     # --- settings --------------------------------------------------------
 
@@ -258,7 +279,7 @@ class FujiCamera:
                     ptp.transaction(OP_InitiateOpenCapture, (0, 0))
                     break
                 except PTPError as e:
-                    if e.code != 0x2019:
+                    if e.code != RC_DeviceBusy:
                         raise CameraError(f"live view failed: {e}")
                     # Busy: already running from an earlier session
                     if ptp.object_handles(LIVE):
@@ -283,8 +304,11 @@ class FujiCamera:
             handles = ptp.object_handles(LIVE)
             if not handles:
                 return None
-            jpeg = ptp.get_object(handles[0])
-            ptp.delete_object(handles[0])  # makes the camera produce the next
+            try:
+                jpeg = ptp.get_object(handles[0])
+                ptp.delete_object(handles[0])  # makes the camera produce the next
+            except PTPError:
+                return None  # frame was being replaced (AccessDenied); try again
             return jpeg
         if not self.liveview:
             self.start_liveview()
@@ -310,8 +334,10 @@ class FujiCamera:
                 bulb = ptp.get_prop(0x500D, U32) == SHUTTER_BULB
                 if bulb and not bulb_seconds:
                     raise CameraError("shutter dial is on B: give an exposure time")
-                ptp.set_prop(DPC_CaptureControl, U16, CC_HalfPress)
-                ptp.initiate_capture()
+                def half_press():
+                    ptp.set_prop(DPC_CaptureControl, U16, CC_HalfPress)
+                    ptp.initiate_capture()
+                busy_retry(half_press)  # still busy with the previous shot
                 deadline = time.time() + 5
                 while ptp.get_prop(DPC_AFStatus, U16) == 1 and time.time() < deadline:
                     time.sleep(0.05)

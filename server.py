@@ -42,7 +42,7 @@ class LiveView:
             try:
                 frame = self.cam.liveview_frame()
                 err = None
-            except CameraError as e:
+            except Exception as e:  # never let the grabber thread die
                 frame, err = None, str(e)
                 time.sleep(1)
             with self.cond:
@@ -52,7 +52,7 @@ class LiveView:
                 self.cond.notify_all()
         try:
             self.cam.stop_liveview()
-        except CameraError:
+        except Exception:
             pass
         with self.cond:
             self.thread = None
